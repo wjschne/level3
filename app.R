@@ -17,12 +17,14 @@ library(gfonts)
 library(ragg)
 library(bslib)
 library(katex)
-library(shinyWidgets)
+library(purrr)
+library(mvtnorm)
+
 # gfonts::setup_font("roboto-condensed", output_dir = "www", variants = "regular")
 
-my_katex <- purrr::partial(katex::katex_html, displayMode = F, preview = F)
+my_katex <- partial(katex_html, displayMode = F, preview = F)
 my_labels <- function(x, space = " ", ...) {
-  x_new <- paste0(signs::signs(x, ...), ifelse(x < 0, space, 
+  x_new <- paste0(signs(x, ...), ifelse(x < 0, space, 
                                                ""))
   Encoding(x_new) <- "UTF-8"
   x_new
@@ -31,13 +33,13 @@ my_labels <- function(x, space = " ", ...) {
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
-  theme = bslib::bs_theme(primary = "#1e6b65"),
+  theme = bs_theme(primary = "#1e6b65"),
   tags$head(
     tags$link(
-      rel="stylesheet",
-      href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css",
-      integrity="sha384-vKruj+a13U8yHIkAyGgK1J3ArTLzrFGBbBc0tDp4ad/EyewESeXE/Iv67Aj8gKZ0",
-      crossorigin="anonymous"
+      rel = "stylesheet",
+      href = "https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css",
+      integrity = "sha384-vKruj+a13U8yHIkAyGgK1J3ArTLzrFGBbBc0tDp4ad/EyewESeXE/Iv67Aj8gKZ0",
+      crossorigin = "anonymous"
     )
   ),
   tags$link(rel = "stylesheet", type = "text/css", href = "css/roboto-condensed.css"),
@@ -75,7 +77,7 @@ ui <- fluidPage(
                                HTML(paste0(my_katex("\\tau_{2.00}"), " (L2 Intercept Variance)")),
                                       value = 0, 
                                       min = 0, 
-                                      max = 100, 
+                                      max = 10, 
                                       step = .01))),
           ### lb b00k ----
           uiOutput("b00k"),
@@ -106,7 +108,7 @@ ui <- fluidPage(
                    "tau300",
                    HTML(paste0(my_katex("\\tau_{3.00}"), " (L3 Intercept Variance)")),
                    min = 0,
-                   max = 100,
+                   max = 10,
                    value = 0,
                    step = .1
                  ))), 
@@ -139,7 +141,7 @@ ui <- fluidPage(
                    "tau311",
                    HTML(paste0(my_katex("\\tau_{3.11}"), " (L3 T Slope Variance)")),
                    min = 0,
-                   max = 100,
+                   max = 10,
                    value = 0,
                    step = .1
                  ))), 
@@ -150,7 +152,7 @@ ui <- fluidPage(
                           sliderInput(
                             "tau211",
                             HTML(paste0(my_katex("\\tau_{1.11}"), " (L2 S Slope Variance)")),
-                                      value = 0, min = 0, max = 100, step = .01))),
+                                      value = 0, min = 0, max = 10, step = .01))),
           ### lb b10k ----
           uiOutput("b10k"),
           fluidRow(column(
@@ -180,7 +182,7 @@ ui <- fluidPage(
                    "tau322",
                    HTML(paste0(my_katex("\\tau_{3.22}"), " (L3 S Slope Variance)")),
                    min = 0,
-                   max = 100,
+                   max = 10,
                    value = 0,
                    step = .1
                  ))), 
@@ -213,7 +215,7 @@ ui <- fluidPage(
                    "tau333",
                    HTML(paste0(my_katex("\\tau_{3.33}"), " (L3 S &times; T Interaction Variance)")),
                    min = 0,
-                   max = 100,
+                   max = 10,
                    value = 0,
                    step = .1
                  ))),
@@ -256,6 +258,15 @@ ui <- fluidPage(
         # Mainpanel ----
         mainPanel(width = 7,
             plotOutput("distPlot", width = 800, height = 800),
+            fluidRow(column(8,
+                            shinyWidgets::radioGroupButtons(
+                              "xaxis", 
+                              label = "X-Axis", 
+                              choices = c("Student", "Teacher", "Principal"), 
+                              selected = "Student")),
+                     column(4, checkboxInput("plotrandom", 
+                                             label = "Show Random lines",
+                                             value = FALSE))),
             uiOutput("equation")
         )
     )
@@ -546,7 +557,8 @@ server <- function(input, output) {
             "\\end{aligned}")))
       
     })
-
+    
+    # plot ----
     output$distPlot <- renderPlot({
       
       b000 <- input$b000
@@ -558,22 +570,123 @@ server <- function(input, output) {
       b011 <- input$b011
       b111 <- input$b111
       
-      tidyr::crossing(A = c(-2,2), 
-                      B = -1:1,
-                      C = -1:1) %>% 
+      vx <- c(-2, 0, 2)
+      vc <- -1:1
+      
+      if (input$xaxis == "Student") {
+        v_a <- vx
+        v_b = vc
+        v_c <- vc
+      }
+      
+      if (input$xaxis == "Teacher") {
+        v_a <- vc
+        v_b = vx
+        v_c <- vc
+      }
+      
+      if (input$xaxis == "Principal") {
+        v_a <- vc
+        v_b = vc
+        v_c <- vx
+      }
+      
+      v_ABC <- c(A = "Student", B = "Teacher", C = "Principal")
+      v_STP <- c(Student = "A", Teacher = "B", Principal = "C")
+      
+      v_xswitch <- v_STP[input$xaxis]
+      v_colswitch <- switch(input$xaxis, Student = "B", Teacher = "C", Principal = "B")
+      v_panelswitch <- switch(input$xaxis, Student = "C", Teacher = "A", Principal = "A")
+      
+      d <- crossing(A = v_a, B = v_b, C = v_c) %>% 
         mutate(Y = b000 + b100 * A + b010 * B + b001 * C + b110 * A * B + b101 * A * C + b011 * B * C + b111 * A * B * C,
-               fB = factor(B, labels = c("−1SD", "Mean", "+1SD")),
-               `Principal Effort` = factor(C, labels = c("−1SD", "Mean", "+1SD"))) %>% 
-        ggplot(aes(A, Y)) + 
-        geom_line(aes(color = fB), linewidth = 1) + 
-        facet_grid(cols = vars(`Principal Effort`), labeller = label_both) +
+               v_xaxis = v_xswitch,
+               v_xaxis = ifelse(v_xaxis == "A", A, ifelse(v_xaxis == "B", B, C)),
+               v_color = v_colswitch,
+               v_color = factor(ifelse(v_color == "A", A, ifelse(v_color == "B", B, C)), labels = c("−1SD", "Mean", "+1SD")),
+               v_panel = v_panelswitch,
+               v_panel = factor(ifelse(v_panel == "A", A, ifelse(v_panel == "B", B, C)), labels = paste0(v_ABC[v_panelswitch], " Effort: ", c("−1SD", "Mean", "+1SD")))) 
+      
+      pp <- ggplot(d, aes(v_xaxis, Y)) + 
+        facet_grid(cols = vars(v_panel)) +
         coord_cartesian(ylim = b000 + c(-12,12)) + 
-        scale_color_manual("Teacher Effort", values = c(`−1SD` = "royalblue4", `Mean` = "gray30", `+1SD` = "firebrick4")) +
-        scale_x_continuous("Student Effort", labels = my_labels) +
+        scale_color_manual(paste0(v_ABC[v_colswitch], " Effort"), values = c(`−1SD` = "royalblue4", `Mean` = "gray30", `+1SD` = "firebrick4")) +
+        scale_x_continuous(paste0(input$xaxis, " Effort"), labels = my_labels) +
         scale_y_continuous("Predicted Reading") +
         theme_light(base_size = 20, base_family = "Roboto Condensed") + 
         theme(legend.position = "top") + 
-          labs(caption = "Level 1 = Student, Level 2 = Teacher, Level 3 = Principal")
+        labs(caption = "Level 1 = Student, Level 2 = Teacher, Level 3 = Principal")
+      
+      
+      if (input$plotrandom) {
+        phi_3 <- matrix(c(1,input$tau310, input$tau320, input$tau330,
+                          input$tau310, 1, input$tau321, input$tau331,
+                          input$tau320, input$tau321, 1, input$tau332,
+                          input$tau330, input$tau331, input$tau332, 1), nrow = 4)
+        
+        
+        
+        sd_3 <- diag(sqrt(c(input$tau300, input$tau311, input$tau322, input$tau333)))
+        tau_3 <- sd_3 %*% phi_3 %*% sd_3
+        
+        set.seed(1)
+        
+    
+        
+        d_3 <- tibble(C = v_c) %>% 
+          mutate(n_3 = 20) %>% 
+          uncount(n_3) %>% 
+          mutate(id_3 = row_number())
+        
+        
+        
+        e_3 <- mvtnorm::rmvnorm(nrow(d_3), mean = c(e_00k = 0, 
+                                                    e_01k = 0,
+                                                    e_10k = 0,
+                                                    e_11k = 0), 
+                                sigma = tau_3) %>% 
+          as_tibble()
+        
+        d_2 <- d_3 %>% 
+          bind_cols(e_3) %>% 
+          crossing(B = v_b) %>% 
+          mutate(n_2 = 5) %>% 
+          uncount(n_2) %>% 
+          mutate(id_2 = row_number())
+        
+        tau210 <- sqrt(input$tau200 * input$tau211) * input$tau210
+        tau_2 <- matrix(c(input$tau200, tau210,
+                          tau210, input$tau211), nrow = 2)
+        
+        e_2 <- mvtnorm::rmvnorm(nrow(d_2), mean = c(e_0jk = 0, 
+                                                    e_1jk = 0), 
+                                sigma = tau_2) %>% 
+          as_tibble()
+        
+        d_1 <- d_2 %>% 
+          bind_cols(e_2) %>% 
+          crossing(A = v_a) %>%
+          # uncount(n_1) %>% 
+          mutate(Y = b000 + b100 * A + b010 * B + b001 * C + b110 * A * B + b101 * A * C + b011 * B * C + b111 * A * B * C + e_00k + e_01k * B + (e_10k + e_11k * B) * A + e_0jk + e_1jk * A,
+                 v_xaxis = v_xswitch,
+                 v_xaxis = ifelse(v_xaxis == "A", A, ifelse(v_xaxis == "B", B, C)),
+                 v_color = v_colswitch,
+                 v_id = paste0(id_2, ".", id_3),
+                 v_color = factor(ifelse(v_color == "A", A, ifelse(v_color == "B", B, C)), labels = c("−1SD", "Mean", "+1SD")),
+                 v_panel = v_panelswitch,
+                 v_panel = factor(ifelse(v_panel == "A", A, ifelse(v_panel == "B", B, C)), labels = paste0(v_ABC[v_panelswitch], " Effort: ", c("−1SD", "Mean", "+1SD")))) 
+        
+        pp <- pp + 
+          geom_line(aes(color = v_color, group = v_id), data = d_1, linewidth = .1, show.legend = F, alpha = .3)
+        
+      }
+
+      
+
+      
+      
+      pp +
+        geom_line(aes(color = v_color), linewidth = 1) 
         
         
        
